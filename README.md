@@ -206,6 +206,68 @@ Managed automatically by PlatformIO:
 5. **Display** — Show next 3 matching trams
 6. **Sleep** — Enter deep sleep to save power
 
+## Battery Life Estimation
+
+Detailed power analysis for the 3× AAA battery configuration.
+
+### Component Current Draw
+
+| Component | Active | Deep Sleep | Notes |
+|-----------|--------|------------|-------|
+| **ESP32** | ~80 mA | ~10 µA | WiFi TX peaks at ~240 mA |
+| **SSD1306 OLED** | ~20 mA | ~0 µA | Varies with content (~50% pixels lit) |
+| **MCP1700 Regulator** | ~4 µA | ~4 µA | Quiescent current |
+| **Total Active** | **~100 mA** | — | Average during operation |
+| **Total Sleep** | — | **~15 µA** | Deep sleep with display off |
+
+### Power Cycle Breakdown
+
+Each button press triggers one complete cycle:
+
+| Phase | Duration | Current | Energy (mAh) |
+|-------|----------|---------|--------------|
+| Boot + WiFi Connect | ~5 sec | 120 mA | 0.167 |
+| NTP Sync | ~2 sec | 100 mA | 0.056 |
+| HTTPS Request | ~3 sec | 110 mA | 0.092 |
+| Display Active | 30 sec | 25 mA | 0.208 |
+| **Total per cycle** | **~40 sec** | — | **~0.52 mAh** |
+
+> **Note:** WiFi is disabled after data fetch, so the 30-second display period only draws ~25 mA (ESP32 idle + OLED).
+
+### Estimated Battery Life
+
+**Typical usage: 3 activations per day**
+
+```
+Daily consumption:
+  Active:  3 cycles × 0.52 mAh = 1.56 mAh
+  Sleep:   15 µA × 24 h        = 0.36 mAh
+  Total:                       = 1.92 mAh/day
+
+Battery life:
+  900 mAh ÷ 1.92 mAh/day ≈ 470 days (~15 months)
+```
+
+> **Note:** Assumes ~900 mAh usable capacity from 3× AAA alkaline batteries (accounting for 3.6V voltage cutoff).
+
+| Usage Pattern | Cycles/Day | Battery Life (Alkaline) |
+|---------------|------------|-------------------------|
+| Minimal (1×/day) | 1 | ~2 years |
+| Typical (3×/day) | 3 | **~15 months** |
+| Moderate (5×/day) | 5 | ~10 months |
+| Heavy (10×/day) | 10 | ~5 months |
+
+### Key Takeaways
+
+- **Sleep current dominates** — At low usage, the 15 µA sleep current determines battery life
+- **Theoretical maximum** — If never used: 900 mAh ÷ 0.36 mAh/day ≈ 2,500 days (~7 years)
+- **Sweet spot** — 1–5 checks per day yields over a year of battery life
+
+### Tips to Maximize Battery Life
+
+1. **Reduce `awakeTimeMs`** — 15 seconds instead of 30 saves ~0.1 mAh per cycle
+2. **Use quality alkaline batteries** — Higher capacity and better voltage retention
+
 ---
 
 <div align="center">
