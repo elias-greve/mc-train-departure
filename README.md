@@ -16,6 +16,8 @@
 
 **Live departure times** · **Delay tracking** · **15+ months battery life**
 
+*Configurable for any German train, tram, or bus station*
+
 ---
 
 </div>
