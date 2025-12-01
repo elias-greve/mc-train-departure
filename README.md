@@ -1,4 +1,4 @@
-# VAG Freiburg Tram Departure Display
+# Tram Departure Display
 
 > Real-time tram departure information on an ESP32-powered OLED display
 
