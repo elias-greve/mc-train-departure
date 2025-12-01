@@ -1,20 +1,43 @@
-# Tram Departure Display
-
-> Real-time tram departure information on an ESP32-powered OLED display
-
 <div align="center">
 
-![ESP32](https://img.shields.io/badge/ESP32-DOIT_DevKit_v1-blue?style=flat-square&logo=espressif)
-![PlatformIO](https://img.shields.io/badge/PlatformIO-Arduino-orange?style=flat-square&logo=platformio)
-![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
+# Tram Departure Display
 
-<img src="images/mc-train-departures.gif" alt="OLED Display showing tram departures" width="300">
+**Real-time tram departures on a battery-powered ESP32 OLED display**
+
+[![ESP32](https://img.shields.io/badge/ESP32-DOIT_DevKit_v1-000000?style=for-the-badge&logo=espressif&logoColor=E7352C)](https://www.espressif.com/)
+[![PlatformIO](https://img.shields.io/badge/PlatformIO-Arduino-FF7F00?style=for-the-badge&logo=platformio&logoColor=white)](https://platformio.org/)
+[![License](https://img.shields.io/badge/License-MIT-22C55E?style=for-the-badge)](LICENSE)
+
+<br>
+
+<img src="images/mc-train-departures.gif" alt="OLED Display showing tram departures" width="320">
+
+<br>
+
+**Live departure times** · **Delay tracking** · **15+ months battery life**
+
+---
 
 </div>
 
 ## Overview
 
-A compact embedded system that displays live departure times for German public transit. The display shows the next departures for your configured station and directions, complete with delay information and countdown timers.
+A compact embedded system that fetches live departure times for German public transit and displays them on a crisp OLED screen. Configure your station, filter by direction, and never miss your tram again.
+
+<table>
+<tr>
+<td width="50%">
+
+### Features
+
+- **Real-time data** from the German Rail API
+- **Smart filtering** — shows only relevant directions
+- **Delay indicators** — see if your tram is running late
+- **Countdown display** — minutes until departure
+- **Power efficient** — deep sleep between updates
+
+</td>
+<td width="50%">
 
 ```
 ┌────────────────────────────┐
@@ -24,13 +47,9 @@ A compact embedded system that displays live departure times for German public t
 └────────────────────────────┘
 ```
 
-## Features
-
-- **Real-time data** from the German Rail transport API
-- **Smart filtering** — shows only relevant directions
-- **Delay indicators** — see if your tram is running late
-- **Countdown display** — minutes until departure
-- **Power efficient** — deep sleep between updates
+</td>
+</tr>
+</table>
 
 ## Hardware
 
