@@ -13,6 +13,7 @@
 #include <Adafruit_SSD1306.h>
 #include <time.h>
 #include "secrets.h"
+#include "departure_logic.h"
 
 // --- USER SETTINGS ---
 const int awakeTimeMs = 30000;  // Time to display results before sleep (ms)
@@ -204,52 +205,30 @@ void fetchDepartures() {
         String direction = dep["direction"].as<String>();
 
         // Check if direction matches any filter keyword
-        String filters = DIRECTION_FILTER;
-        bool matchesFilter = filters.isEmpty();
-        if (!matchesFilter) {
-          int start = 0;
-          while (start < filters.length()) {
-            int comma = filters.indexOf(',', start);
-            if (comma == -1) comma = filters.length();
-            String keyword = filters.substring(start, comma);
-            keyword.trim();
-            if (direction.indexOf(keyword) != -1) {
-              matchesFilter = true;
-              break;
-            }
-            start = comma + 1;
-          }
-        }
+        bool matchesFilter = matchesDirectionFilter(direction.c_str(), DIRECTION_FILTER);
 
         if (matchesFilter) {
 
           String timeString = dep["when"].as<String>();
           int delaySec = dep["delay"] | 0;
-          int delayMin = delaySec / 60;
+          int delayMin = delaySecondsToMinutes(delaySec);
 
-          int yr, mo, dy, hr, mn, sc;
-          sscanf(timeString.c_str(), "%d-%d-%dT%d:%d:%d", &yr, &mo, &dy, &hr, &mn, &sc);
+          ParsedTime parsed = parseIso8601Time(timeString.c_str());
+          if (!parsed.valid) continue;
 
-          int plannedHr = hr;
-          int plannedMn = mn;
-          int plannedSc = sc - delaySec;
-          while (plannedSc < 0) { plannedSc += 60; plannedMn--; }
-          while (plannedMn < 0) { plannedMn += 60; plannedHr--; }
-          if (plannedHr < 0) plannedHr += 24;
+          int hr = parsed.hour;
+          int mn = parsed.minute;
+
+          PlannedTime planned = calculatePlannedTime(parsed.hour, parsed.minute, parsed.second, delaySec);
+          int plannedHr = planned.hour;
+          int plannedMn = planned.minute;
 
           Serial.print("Direction: ");
           Serial.println(direction);
           Serial.printf("  Planned: %02d:%02d | Delay: %d sec (%d min) | Real: %02d:%02d\n",
                         plannedHr, plannedMn, delaySec, delayMin, hr, mn);
 
-          struct tm depTm = {0};
-          depTm.tm_year = yr - 1900; depTm.tm_mon = mo - 1; depTm.tm_mday = dy;
-          depTm.tm_hour = hr; depTm.tm_min = mn; depTm.tm_sec = sc;
-          depTm.tm_isdst = -1;
-
-          time_t depTime = mktime(&depTm);
-          double diffSeconds = difftime(depTime, now);
-          int minutesLeft = diffSeconds / 60;
+          int minutesLeft = calculateMinutesUntil(parsed, now);
           if (minutesLeft < 2) continue;
 
           int y = rowY[matches];

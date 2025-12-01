@@ -8,9 +8,9 @@
 ![PlatformIO](https://img.shields.io/badge/PlatformIO-Arduino-orange?style=flat-square&logo=platformio)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 
-</div>
+<img src="images/mc-train-departures.gif" alt="OLED Display showing tram departures" width="300">
 
----
+</div>
 
 ## Overview
 
