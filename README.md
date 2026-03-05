@@ -200,6 +200,28 @@ In `src/main.cpp`:
 |---------|---------|-------------|
 | `awakeTimeMs` | `30000` | Display on-time before sleep (ms) |
 
+## Prerequisites
+
+Install the required tools via [Homebrew](https://brew.sh/):
+
+```bash
+brew install platformio clang-format
+```
+
+| Tool | Purpose |
+|------|---------|
+| **PlatformIO** | Build, upload, and test firmware |
+| **clang-format** | Auto-format C/C++ source files |
+
+A `Makefile` is provided for convenience:
+
+| Command | Description |
+|---------|-------------|
+| `make test` | Run unit tests (native) |
+| `make format` | Format all source files |
+| `make upload` | Build and flash to ESP32 |
+| `make monitor` | Open serial monitor |
+
 ## Dependencies
 
 Managed automatically by PlatformIO:
