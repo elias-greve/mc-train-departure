@@ -1,8 +1,8 @@
 #ifndef DEPARTURE_LOGIC_H
 #define DEPARTURE_LOGIC_H
 
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <time.h>
 
 #define MAX_DEPARTURES 10
@@ -16,41 +16,41 @@ extern "C" {
  * Parsed time structure from ISO 8601 string
  */
 typedef struct {
-    int year;
-    int month;
-    int day;
-    int hour;
-    int minute;
-    int second;
-    bool valid;
+  int year;
+  int month;
+  int day;
+  int hour;
+  int minute;
+  int second;
+  bool valid;
 } ParsedTime;
 
 /**
  * Planned time with delay removed
  */
 typedef struct {
-    int hour;
-    int minute;
-    int second;
+  int hour;
+  int minute;
+  int second;
 } PlannedTime;
 
 /**
  * A single departure entry
  */
 typedef struct {
-    char direction[MAX_DIRECTION_LEN];
-    ParsedTime when;
-    int delaySec;
-    bool valid;
+  char direction[MAX_DIRECTION_LEN];
+  ParsedTime when;
+  int delaySec;
+  bool valid;
 } Departure;
 
 /**
  * Result of parsing departures JSON
  */
 typedef struct {
-    Departure departures[MAX_DEPARTURES];
-    int count;
-    bool success;
+  Departure departures[MAX_DEPARTURES];
+  int count;
+  bool success;
 } DeparturesResult;
 
 /**
@@ -111,4 +111,4 @@ DeparturesResult parseDeparturesJson(const char* json, int maxResults);
 }
 #endif
 
-#endif // DEPARTURE_LOGIC_H
+#endif  // DEPARTURE_LOGIC_H

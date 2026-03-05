@@ -3,17 +3,18 @@
  * Format: "17:26+3   in 4'"
  */
 
-#include <Arduino.h>
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <WiFiClientSecure.h>
-#include <ArduinoJson.h>
-#include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <Arduino.h>
+#include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <Wire.h>
 #include <time.h>
-#include "secrets.h"
+
 #include "departure_logic.h"
+#include "secrets.h"
 
 // --- USER SETTINGS ---
 const int awakeTimeMs = 30000;  // Time to display results before sleep (ms)
@@ -36,9 +37,9 @@ void setup() {
   // 1. Init Display
   Serial.println("1. Initializing display...");
   Wire.begin(I2C_SDA, I2C_SCL);
-  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println("   FAILED: SSD1306 allocation failed");
-    for(;;);
+    for (;;);
   }
   Serial.println("   OK");
   display.clearDisplay();
@@ -67,22 +68,24 @@ void setup() {
   showProgress(0);
 
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
   int timeout = 0;
   while (WiFi.status() != WL_CONNECTED && timeout < 40) {
     delay(250);
     Serial.print(".");
-    showProgress(timeout * 100 / 40 / 3); // 0-33%
+    showProgress(timeout * 100 / 40 / 3);  // 0-33%
     timeout++;
   }
 
-  if(WiFi.status() != WL_CONNECTED) {
+  if (WiFi.status() != WL_CONNECTED) {
     Serial.println("\n   FAILED: Could not connect to WiFi");
     display.clearDisplay();
     display.setTextSize(1);
     display.setCursor(30, 28);
     display.print("WiFi Error!");
     display.display();
-    delay(2000); esp_deep_sleep_start();
+    delay(2000);
+    esp_deep_sleep_start();
   }
   Serial.println("\n   OK - Connected!");
   Serial.print("   IP: ");
@@ -100,7 +103,7 @@ void setup() {
   while (now < 8 * 3600 * 2 && retry < 10) {
     delay(500);
     Serial.print(".");
-    showProgress(33 + retry * 100 / 10 / 3); // 33-66%
+    showProgress(33 + retry * 100 / 10 / 3);  // 33-66%
     now = time(nullptr);
     retry++;
   }
@@ -181,7 +184,7 @@ void fetchDepartures() {
 
     if (httpCode == HTTP_CODE_OK) {
       Serial.println("   Parsing JSON...");
-      WiFiClient *stream = http.getStreamPtr();
+      WiFiClient* stream = http.getStreamPtr();
 
       StaticJsonDocument<200> filter;
       filter["departures"][0]["direction"] = true;
@@ -208,7 +211,6 @@ void fetchDepartures() {
         bool matchesFilter = matchesDirectionFilter(direction.c_str(), DIRECTION_FILTER);
 
         if (matchesFilter) {
-
           String timeString = dep["when"].as<String>();
           int delaySec = dep["delay"] | 0;
           int delayMin = delaySecondsToMinutes(delaySec);
@@ -225,8 +227,8 @@ void fetchDepartures() {
 
           Serial.print("Direction: ");
           Serial.println(direction);
-          Serial.printf("  Planned: %02d:%02d | Delay: %d sec (%d min) | Real: %02d:%02d\n",
-                        plannedHr, plannedMn, delaySec, delayMin, hr, mn);
+          Serial.printf("  Planned: %02d:%02d | Delay: %d sec (%d min) | Real: %02d:%02d\n", plannedHr, plannedMn,
+                        delaySec, delayMin, hr, mn);
 
           int minutesLeft = calculateMinutesUntil(parsed, now);
           if (minutesLeft < 2) continue;
@@ -277,7 +279,7 @@ void fetchDepartures() {
       display.display();
       Serial.println("   Display updated");
       http.end();
-      return; // Success, exit function
+      return;  // Success, exit function
     }
 
     // Error handling
