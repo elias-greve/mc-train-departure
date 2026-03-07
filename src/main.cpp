@@ -9,6 +9,8 @@
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 #include <WiFiClientSecure.h>
 #include <Wire.h>
 #include <time.h>
@@ -31,6 +33,8 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 void fetchDepartures();
 
 void setup() {
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);  // Disable brownout detector
+
   Serial.begin(115200);
   Serial.println("\n\n=== Starting VAG Departure Display ===");
 
@@ -52,9 +56,7 @@ void setup() {
     int barHeight = 6;
     int x = (128 - barWidth) / 2;
     int y = (64 - barHeight) / 2;
-    // Outline
     display.drawRect(x, y, barWidth, barHeight, WHITE);
-    // Fill
     int fillWidth = (barWidth - 2) * percent / 100;
     if (fillWidth > 0) {
       display.fillRect(x + 1, y + 1, fillWidth, barHeight - 2, WHITE);
@@ -67,8 +69,9 @@ void setup() {
   Serial.println(WIFI_SSID);
   showProgress(0);
 
+  WiFi.mode(WIFI_STA);
+  WiFi.setTxPower(WIFI_POWER_2dBm);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  WiFi.setTxPower(WIFI_POWER_8_5dBm);
   int timeout = 0;
   while (WiFi.status() != WL_CONNECTED && timeout < 40) {
     delay(250);
