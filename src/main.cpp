@@ -17,7 +17,7 @@
 #include "soc/soc.h"
 
 // --- USER SETTINGS ---
-const int awakeTimeMs = 150000;  // Time to display results before sleep (ms); switch cuts power on release
+const int awakeTimeMs = 10000;  // Time to display results before sleep (ms); switch cuts power on release
 
 // Hardware Settings
 #define I2C_SDA 21
@@ -29,6 +29,50 @@ const int awakeTimeMs = 150000;  // Time to display results before sleep (ms); s
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 void fetchDepartures();
+
+// Spinner runs on the other core so it keeps moving during synchronous WiFi
+// connect and HTTP GET. The main core flips spinnerRunning=false before drawing
+// real content; the task then exits and self-deletes.
+volatile bool spinnerRunning = false;
+SemaphoreHandle_t displayMutex = NULL;
+
+void spinnerTask(void* /*param*/) {
+  // 8 dots arranged in a ring; the "head" dot is largest, trailing dots shrink.
+  const int cx = 64, cy = 32, ringR = 18;
+  const int dotCount = 8;
+  // Radius per trail position (head=0, then clockwise). Index = (i - head) mod 8.
+  const int dotR[8] = {5, 4, 3, 2, 1, 1, 0, 0};
+  int head = 0;
+  while (spinnerRunning) {
+    if (xSemaphoreTake(displayMutex, portMAX_DELAY) == pdTRUE) {
+      display.clearDisplay();
+      for (int i = 0; i < dotCount; i++) {
+        float angle = -PI / 2.0f + i * (2.0f * PI / dotCount);
+        int dx = (int)(ringR * cosf(angle));
+        int dy = (int)(ringR * sinf(angle));
+        int trail = (head - i + dotCount) % dotCount;
+        display.fillCircle(cx + dx, cy + dy, dotR[trail], WHITE);
+      }
+      display.display();
+      xSemaphoreGive(displayMutex);
+    }
+    head = (head + 1) % dotCount;
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+  vTaskDelete(NULL);
+}
+
+void startSpinner() {
+  if (displayMutex == NULL) displayMutex = xSemaphoreCreateMutex();
+  spinnerRunning = true;
+  xTaskCreatePinnedToCore(spinnerTask, "spinner", 4096, NULL, 1, NULL, 0);
+}
+
+void stopSpinner() {
+  spinnerRunning = false;
+  // Brief grace period to let the task finish its current draw and exit cleanly.
+  vTaskDelay(pdMS_TO_TICKS(100));
+}
 
 void setup() {
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);  // Disable brownout detector
@@ -47,25 +91,11 @@ void setup() {
   display.clearDisplay();
   display.setTextColor(WHITE);
 
-  // Progress bar helper: draws bar at center of screen
-  auto showProgress = [](int percent) {
-    display.clearDisplay();
-    int barWidth = 80;
-    int barHeight = 6;
-    int x = (128 - barWidth) / 2;
-    int y = (64 - barHeight) / 2;
-    display.drawRect(x, y, barWidth, barHeight, WHITE);
-    int fillWidth = (barWidth - 2) * percent / 100;
-    if (fillWidth > 0) {
-      display.fillRect(x + 1, y + 1, fillWidth, barHeight - 2, WHITE);
-    }
-    display.display();
-  };
+  startSpinner();
 
   // 2. WiFi
   Serial.print("2. Connecting to WiFi: ");
   Serial.println(WIFI_SSID);
-  showProgress(0);
 
   WiFi.mode(WIFI_STA);
   WiFi.setTxPower(WIFI_POWER_11dBm);
@@ -74,12 +104,12 @@ void setup() {
   while (WiFi.status() != WL_CONNECTED && timeout < 40) {
     delay(250);
     Serial.print(".");
-    showProgress(timeout * 100 / 40 / 2);  // 0-50%
     timeout++;
   }
 
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("\n   FAILED: Could not connect to WiFi");
+    stopSpinner();
     display.clearDisplay();
     display.setTextSize(1);
     display.setCursor(30, 28);
@@ -91,11 +121,9 @@ void setup() {
   Serial.println("\n   OK - Connected!");
   Serial.print("   IP: ");
   Serial.println(WiFi.localIP());
-  showProgress(50);
 
   // 3. Get Data
   Serial.println("3. Fetching departure data...");
-  showProgress(80);
   fetchDepartures();
 
   // 4. Shutdown WiFi
@@ -145,6 +173,7 @@ void fetchDepartures() {
         continue;
       }
       // All retries failed
+      stopSpinner();
       display.clearDisplay();
       display.setTextSize(1);
       display.setCursor(0, 24);
@@ -180,6 +209,7 @@ void fetchDepartures() {
           continue;
         }
         // All retries exhausted with parse errors
+        stopSpinner();
         display.clearDisplay();
         display.setTextSize(1);
         display.setCursor(0, 20);
@@ -190,6 +220,7 @@ void fetchDepartures() {
         return;
       }
 
+      stopSpinner();
       display.clearDisplay();
 
       int matches = 0;
@@ -266,6 +297,7 @@ void fetchDepartures() {
 
     if (attempt == maxRetries) {
       // All retries exhausted, show error
+      stopSpinner();
       display.clearDisplay();
       display.setTextSize(1);
       display.setCursor(0, 20);
