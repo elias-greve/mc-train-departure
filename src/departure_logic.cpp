@@ -5,23 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-ParsedTime parseIso8601Time(const char* timeString) {
-  ParsedTime result = {0, 0, 0, 0, 0, 0, false};
-
-  if (timeString == NULL || strlen(timeString) < 19) {
-    return result;
-  }
-
-  int matched = sscanf(timeString, "%d-%d-%dT%d:%d:%d", &result.year, &result.month, &result.day, &result.hour,
-                       &result.minute, &result.second);
-
-  if (matched == 6) {
-    result.valid = true;
-  }
-
-  return result;
-}
-
 bool matchesDirectionFilter(const char* direction, const char* filter) {
   // Empty or NULL filter matches everything
   if (filter == NULL || strlen(filter) == 0) {
@@ -80,55 +63,15 @@ bool matchesDirectionFilter(const char* direction, const char* filter) {
   return matches;
 }
 
-PlannedTime calculatePlannedTime(int hour, int minute, int second, int delaySec) {
-  PlannedTime result;
-
-  result.second = second - delaySec;
-  result.minute = minute;
-  result.hour = hour;
-
-  // Handle underflow for seconds
-  while (result.second < 0) {
-    result.second += 60;
-    result.minute--;
+// Helper: read an int from a JSON value that may be a string ("5") or a number (5).
+static int readIntField(JsonVariantConst v) {
+  if (v.isNull()) return 0;
+  if (v.is<const char*>()) {
+    const char* s = v.as<const char*>();
+    return s ? atoi(s) : 0;
   }
-
-  // Handle underflow for minutes
-  while (result.minute < 0) {
-    result.minute += 60;
-    result.hour--;
-  }
-
-  // Handle underflow for hours (wrap around midnight)
-  while (result.hour < 0) {
-    result.hour += 24;
-  }
-
-  return result;
-}
-
-int calculateMinutesUntil(ParsedTime parsed, time_t now) {
-  if (!parsed.valid) {
-    return -1;
-  }
-
-  struct tm depTm = {0};
-  depTm.tm_year = parsed.year - 1900;
-  depTm.tm_mon = parsed.month - 1;
-  depTm.tm_mday = parsed.day;
-  depTm.tm_hour = parsed.hour;
-  depTm.tm_min = parsed.minute;
-  depTm.tm_sec = parsed.second;
-  depTm.tm_isdst = -1;
-
-  time_t depTime = mktime(&depTm);
-  double diffSeconds = difftime(depTime, now);
-
-  return (int)(diffSeconds / 60);
-}
-
-int delaySecondsToMinutes(int delaySec) {
-  return delaySec / 60;
+  if (v.is<int>()) return v.as<int>();
+  return 0;
 }
 
 DeparturesResult parseDeparturesJson(const char* json, int maxResults) {
@@ -142,10 +85,13 @@ DeparturesResult parseDeparturesJson(const char* json, int maxResults) {
     maxResults = MAX_DEPARTURES;
   }
 
-  StaticJsonDocument<200> filter;
-  filter["departures"][0]["direction"] = true;
-  filter["departures"][0]["when"] = true;
-  filter["departures"][0]["delay"] = true;
+  StaticJsonDocument<512> filter;
+  filter["departureList"][0]["countdown"] = true;
+  filter["departureList"][0]["dateTime"] = true;
+  filter["departureList"][0]["realDateTime"] = true;
+  filter["departureList"][0]["servingLine"]["direction"] = true;
+  filter["departureList"][0]["servingLine"]["number"] = true;
+  filter["departureList"][0]["servingLine"]["realtime"] = true;
 
   DynamicJsonDocument doc(8192);
   DeserializationError error = deserializeJson(doc, json, DeserializationOption::Filter(filter));
@@ -154,32 +100,52 @@ DeparturesResult parseDeparturesJson(const char* json, int maxResults) {
     return result;
   }
 
-  JsonArray departures = doc["departures"];
+  JsonArrayConst departures = doc["departureList"].as<JsonArrayConst>();
   if (departures.isNull()) {
     return result;
   }
 
   result.success = true;
 
-  for (JsonObject dep : departures) {
+  for (JsonObjectConst dep : departures) {
     if (result.count >= maxResults) break;
 
     Departure* d = &result.departures[result.count];
 
-    // Parse direction
-    const char* direction = dep["direction"] | "";
+    // Direction
+    const char* direction = dep["servingLine"]["direction"] | "";
     strncpy(d->direction, direction, MAX_DIRECTION_LEN - 1);
     d->direction[MAX_DIRECTION_LEN - 1] = '\0';
 
-    // Parse when
-    const char* whenStr = dep["when"] | "";
-    d->when = parseIso8601Time(whenStr);
+    // Scheduled time
+    JsonVariantConst sched = dep["dateTime"];
+    d->schedHour = readIntField(sched["hour"]);
+    d->schedMinute = readIntField(sched["minute"]);
 
-    // Parse delay (can be null, default to 0)
-    d->delaySec = dep["delay"] | 0;
+    // Real time (falls back to scheduled when absent).
+    // Use an inner-field presence check because the JSON filter can leave an
+    // empty object when EFA omits realDateTime entirely.
+    d->realHour = d->schedHour;
+    d->realMinute = d->schedMinute;
+    if (dep["realDateTime"]["hour"].is<const char*>()) {
+      JsonVariantConst real = dep["realDateTime"];
+      d->realHour = readIntField(real["hour"]);
+      d->realMinute = readIntField(real["minute"]);
+    }
 
-    // Mark as valid if we have a valid time
-    d->valid = d->when.valid;
+    // Delay in minutes with midnight wrap clamp
+    int delayMin = (d->realHour * 60 + d->realMinute) - (d->schedHour * 60 + d->schedMinute);
+    if (delayMin < -720) delayMin += 1440;
+    if (delayMin > 720) delayMin -= 1440;
+    d->delayMin = delayMin;
+
+    // Countdown
+    d->countdown = readIntField(dep["countdown"]);
+
+    // Mark valid if we at least have a servingLine present (dateTime may
+    // legitimately be all zeros for malformed entries; treat a missing
+    // dateTime as invalid).
+    d->valid = !sched.isNull();
 
     result.count++;
   }

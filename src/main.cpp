@@ -9,17 +9,15 @@
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
-#include "soc/soc.h"
-#include "soc/rtc_cntl_reg.h"
-#include <WiFiClientSecure.h>
 #include <Wire.h>
-#include <time.h>
 
 #include "departure_logic.h"
 #include "secrets.h"
+#include "soc/rtc_cntl_reg.h"
+#include "soc/soc.h"
 
 // --- USER SETTINGS ---
-const int awakeTimeMs = 30000;  // Time to display results before sleep (ms)
+const int awakeTimeMs = 10000;  // Time to display results before sleep (ms); switch cuts power on release
 
 // Hardware Settings
 #define I2C_SDA 21
@@ -31,6 +29,50 @@ const int awakeTimeMs = 30000;  // Time to display results before sleep (ms)
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 void fetchDepartures();
+
+// Spinner runs on the other core so it keeps moving during synchronous WiFi
+// connect and HTTP GET. The main core flips spinnerRunning=false before drawing
+// real content; the task then exits and self-deletes.
+volatile bool spinnerRunning = false;
+SemaphoreHandle_t displayMutex = NULL;
+
+void spinnerTask(void* /*param*/) {
+  // 8 dots arranged in a ring; the "head" dot is largest, trailing dots shrink.
+  const int cx = 64, cy = 32, ringR = 18;
+  const int dotCount = 8;
+  // Radius per trail position (head=0, then clockwise). Index = (i - head) mod 8.
+  const int dotR[8] = {5, 4, 3, 2, 1, 1, 0, 0};
+  int head = 0;
+  while (spinnerRunning) {
+    if (xSemaphoreTake(displayMutex, portMAX_DELAY) == pdTRUE) {
+      display.clearDisplay();
+      for (int i = 0; i < dotCount; i++) {
+        float angle = -PI / 2.0f + i * (2.0f * PI / dotCount);
+        int dx = (int)(ringR * cosf(angle));
+        int dy = (int)(ringR * sinf(angle));
+        int trail = (head - i + dotCount) % dotCount;
+        display.fillCircle(cx + dx, cy + dy, dotR[trail], WHITE);
+      }
+      display.display();
+      xSemaphoreGive(displayMutex);
+    }
+    head = (head + 1) % dotCount;
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+  vTaskDelete(NULL);
+}
+
+void startSpinner() {
+  if (displayMutex == NULL) displayMutex = xSemaphoreCreateMutex();
+  spinnerRunning = true;
+  xTaskCreatePinnedToCore(spinnerTask, "spinner", 4096, NULL, 1, NULL, 0);
+}
+
+void stopSpinner() {
+  spinnerRunning = false;
+  // Brief grace period to let the task finish its current draw and exit cleanly.
+  vTaskDelay(pdMS_TO_TICKS(100));
+}
 
 void setup() {
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);  // Disable brownout detector
@@ -49,39 +91,25 @@ void setup() {
   display.clearDisplay();
   display.setTextColor(WHITE);
 
-  // Progress bar helper: draws bar at center of screen
-  auto showProgress = [](int percent) {
-    display.clearDisplay();
-    int barWidth = 80;
-    int barHeight = 6;
-    int x = (128 - barWidth) / 2;
-    int y = (64 - barHeight) / 2;
-    display.drawRect(x, y, barWidth, barHeight, WHITE);
-    int fillWidth = (barWidth - 2) * percent / 100;
-    if (fillWidth > 0) {
-      display.fillRect(x + 1, y + 1, fillWidth, barHeight - 2, WHITE);
-    }
-    display.display();
-  };
+  startSpinner();
 
   // 2. WiFi
   Serial.print("2. Connecting to WiFi: ");
   Serial.println(WIFI_SSID);
-  showProgress(0);
 
   WiFi.mode(WIFI_STA);
-  WiFi.setTxPower(WIFI_POWER_2dBm);
+  WiFi.setTxPower(WIFI_POWER_11dBm);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   int timeout = 0;
   while (WiFi.status() != WL_CONNECTED && timeout < 40) {
     delay(250);
     Serial.print(".");
-    showProgress(timeout * 100 / 40 / 3);  // 0-33%
     timeout++;
   }
 
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("\n   FAILED: Could not connect to WiFi");
+    stopSpinner();
     display.clearDisplay();
     display.setTextSize(1);
     display.setCursor(30, 28);
@@ -93,54 +121,36 @@ void setup() {
   Serial.println("\n   OK - Connected!");
   Serial.print("   IP: ");
   Serial.println(WiFi.localIP());
-  showProgress(33);
 
-  // 3. Time Sync
-  Serial.println("3. Syncing time with NTP...");
-  configTime(0, 0, "pool.ntp.org");
-  setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
-  tzset();
-
-  time_t now = time(nullptr);
-  int retry = 0;
-  while (now < 8 * 3600 * 2 && retry < 10) {
-    delay(500);
-    Serial.print(".");
-    showProgress(33 + retry * 100 / 10 / 3);  // 33-66%
-    now = time(nullptr);
-    retry++;
-  }
-  Serial.println("\n   OK - Time synced");
-  struct tm timeinfo;
-  localtime_r(&now, &timeinfo);
-  Serial.printf("   Current time: %02d:%02d:%02d\n", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-  showProgress(66);
-
-  // 4. Get Data
-  Serial.println("4. Fetching departure data...");
-  showProgress(80);
+  // 3. Get Data
+  Serial.println("3. Fetching departure data...");
   fetchDepartures();
 
-  // 5. Shutdown WiFi
-  Serial.println("5. Shutting down WiFi...");
+  // 4. Shutdown WiFi
+  Serial.println("4. Shutting down WiFi...");
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   Serial.println("   OK");
 
-  Serial.printf("6. Displaying for %d ms before sleep...\n", awakeTimeMs);
+  Serial.printf("5. Displaying for %d ms before sleep...\n", awakeTimeMs);
   delay(awakeTimeMs);
 
-  // 6. Sleep
-  Serial.println("7. Going to deep sleep...");
+  // 5. Sleep
+  Serial.println("6. Going to deep sleep...");
   display.clearDisplay();
   display.display();
+  display.ssd1306_command(SSD1306_DISPLAYOFF);
   esp_deep_sleep_start();
 }
 
 void fetchDepartures() {
   Serial.println("   Starting HTTP request...");
 
-  String url = "https://v6.db.transport.rest/stops/" + String(STATION_ID) + "/departures?duration=60&results=15";
+  String url =
+      "http://efa.vagfr.de/vagfr3/XSLT_DM_REQUEST"
+      "?outputFormat=JSON&language=de&stateless=1"
+      "&type_dm=stop&name_dm=" +
+      String(STATION_ID) + "&mode=direct&useRealtime=1&limit=15&depType=stopEvents";
   Serial.print("   URL: ");
   Serial.println(url);
 
@@ -150,8 +160,7 @@ void fetchDepartures() {
   for (int attempt = 1; attempt <= maxRetries; attempt++) {
     Serial.printf("   Attempt %d/%d...\n", attempt, maxRetries);
 
-    WiFiClientSecure client;
-    client.setInsecure();
+    WiFiClient client;
     client.setTimeout(15000);
     HTTPClient http;
     http.setTimeout(15000);
@@ -164,6 +173,7 @@ void fetchDepartures() {
         continue;
       }
       // All retries failed
+      stopSpinner();
       display.clearDisplay();
       display.setTextSize(1);
       display.setCursor(0, 24);
@@ -187,90 +197,87 @@ void fetchDepartures() {
 
     if (httpCode == HTTP_CODE_OK) {
       Serial.println("   Parsing JSON...");
-      WiFiClient* stream = http.getStreamPtr();
+      String body = http.getString();
+      http.end();
 
-      StaticJsonDocument<200> filter;
-      filter["departures"][0]["direction"] = true;
-      filter["departures"][0]["when"] = true;
-      filter["departures"][0]["delay"] = true;
+      // Parse via shared logic; retry on parse failure just like HTTP errors.
+      DeparturesResult parsed = parseDeparturesJson(body.c_str(), 15);
+      if (!parsed.success) {
+        Serial.println("   JSON parse error, retrying...");
+        if (attempt < maxRetries) {
+          delay(2000);
+          continue;
+        }
+        // All retries exhausted with parse errors
+        stopSpinner();
+        display.clearDisplay();
+        display.setTextSize(1);
+        display.setCursor(0, 20);
+        display.print("Parse error");
+        display.setCursor(0, 36);
+        display.print("Try again later");
+        display.display();
+        return;
+      }
 
-      DynamicJsonDocument doc(8192);
-      deserializeJson(doc, *stream, DeserializationOption::Filter(filter));
-
+      stopSpinner();
       display.clearDisplay();
 
-      JsonArray departures = doc["departures"];
       int matches = 0;
       int rowY[3] = {0, 24, 48};
 
-      time_t now = time(nullptr);
+      for (int i = 0; i < parsed.count && matches < 3; i++) {
+        Departure* dep = &parsed.departures[i];
+        if (!dep->valid) continue;
+        if (!matchesDirectionFilter(dep->direction, DIRECTION_FILTER)) continue;
+        if (dep->countdown < 2) continue;
 
-      for (JsonObject dep : departures) {
-        if (matches >= 3) break;
+        Serial.print("Direction: ");
+        Serial.println(dep->direction);
+        Serial.printf("  Sched: %02d:%02d | Real: %02d:%02d | Delay: %d min | Countdown: %d\n", dep->schedHour,
+                      dep->schedMinute, dep->realHour, dep->realMinute, dep->delayMin, dep->countdown);
 
-        String direction = dep["direction"].as<String>();
+        int y = rowY[matches];
 
-        // Check if direction matches any filter keyword
-        bool matchesFilter = matchesDirectionFilter(direction.c_str(), DIRECTION_FILTER);
+        display.setTextColor(WHITE);
+        display.setTextSize(2);
+        display.setCursor(0, y);
+        char hrBuf[3], mnBuf[3];
+        snprintf(hrBuf, sizeof(hrBuf), "%02d", dep->realHour);
+        snprintf(mnBuf, sizeof(mnBuf), "%02d", dep->realMinute);
+        display.print(hrBuf);
+        display.print(":");
+        display.setCursor(36, y);
+        display.print(mnBuf);
 
-        if (matchesFilter) {
-          String timeString = dep["when"].as<String>();
-          int delaySec = dep["delay"] | 0;
-          int delayMin = delaySecondsToMinutes(delaySec);
-
-          ParsedTime parsed = parseIso8601Time(timeString.c_str());
-          if (!parsed.valid) continue;
-
-          int hr = parsed.hour;
-          int mn = parsed.minute;
-
-          PlannedTime planned = calculatePlannedTime(parsed.hour, parsed.minute, parsed.second, delaySec);
-          int plannedHr = planned.hour;
-          int plannedMn = planned.minute;
-
-          Serial.print("Direction: ");
-          Serial.println(direction);
-          Serial.printf("  Planned: %02d:%02d | Delay: %d sec (%d min) | Real: %02d:%02d\n", plannedHr, plannedMn,
-                        delaySec, delayMin, hr, mn);
-
-          int minutesLeft = calculateMinutesUntil(parsed, now);
-          if (minutesLeft < 2) continue;
-
-          int y = rowY[matches];
-
-          display.setTextColor(WHITE);
-          display.setTextSize(2);
-          display.setCursor(0, y);
-          char hrBuf[3], mnBuf[3];
-          sprintf(hrBuf, "%02d", hr);
-          sprintf(mnBuf, "%02d", mn);
-          display.print(hrBuf);
-          display.print(":");
-          display.setCursor(36, y);
-          display.print(mnBuf);
-
-          if (delayMin != 0) {
-            display.setTextSize(1);
-            display.setCursor(62, y);
-            if (delayMin > 0) display.print("+");
-            display.print(delayMin);
+        if (dep->delayMin != 0) {
+          display.setTextSize(1);
+          display.setCursor(62, y);
+          // Clamp displayed delay to [-99, +99]; show "!" when out of range.
+          int displayDelay = dep->delayMin;
+          bool delayOverflow = (displayDelay > 99 || displayDelay < -99);
+          if (delayOverflow) {
+            display.print("!");
+          } else {
+            if (displayDelay > 0) display.print("+");
+            display.print(displayDelay);
           }
-
-          display.setTextSize(1);
-          display.setCursor(83, y + 4);
-          display.print("in");
-
-          display.setTextSize(2);
-          int xPos = 110;
-          if (minutesLeft >= 10) xPos = 98;
-
-          display.setCursor(xPos, y);
-          display.print(minutesLeft);
-          display.setTextSize(1);
-          display.print("'");
-
-          matches++;
         }
+
+        display.setTextSize(1);
+        display.setCursor(83, y + 4);
+        display.print("in");
+
+        display.setTextSize(2);
+        int xPos = 110;
+        if (dep->countdown >= 10) xPos = 98;
+
+        display.setCursor(xPos, y);
+        display.print(dep->countdown);
+        display.setTextSize(1);
+        display.print("'");
+
+        matches++;
       }
 
       Serial.printf("   Found %d matching departures\n", matches);
@@ -281,7 +288,6 @@ void fetchDepartures() {
       }
       display.display();
       Serial.println("   Display updated");
-      http.end();
       return;  // Success, exit function
     }
 
@@ -291,6 +297,7 @@ void fetchDepartures() {
 
     if (attempt == maxRetries) {
       // All retries exhausted, show error
+      stopSpinner();
       display.clearDisplay();
       display.setTextSize(1);
       display.setCursor(0, 20);
