@@ -14,7 +14,7 @@
 
 <br>
 
-**Live departure times** · **Delay tracking** · **15+ months battery life**
+**Live departure times** · **Delay tracking** · **Press-to-power** · **Months of battery life**
 
 *Configurable for any German train, tram, or bus station*
 
@@ -36,7 +36,7 @@ A compact embedded system that fetches live departure times for German public tr
 - **Smart filtering** — shows only relevant directions
 - **Delay indicators** — see if your tram is running late
 - **Countdown display** — minutes until departure
-- **Power efficient** — deep sleep between updates
+- **Press-to-power** — momentary switch cuts the battery completely between checks; zero quiescent draw
 
 </td>
 <td width="50%">
@@ -71,12 +71,7 @@ A compact embedded system that fetches live departure times for German public tr
                     │                               ┌──────┐  │
                     │  3V3 ○────────────────────────│ VCC  │  │
                     │                               │      │  │
-                    │  GND ○───┬────────────────────│ GND  │  │
-                    │          │                    │      │  │
-    RESET BUTTON    │          │                    │      │  │
-        ○───────────┼──────────┘                    │      │  │
-       ╱                                            │      │  │
-        ○───────────┼── EN  ○                       │      │  │
+                    │  GND ○────────────────────────│ GND  │  │
                     │                               │      │  │
                     │  GPIO21 ○─────────────────────│ SDA  │  │
                     │                               │      │  │
@@ -84,27 +79,30 @@ A compact embedded system that fetches live departure times for German public tr
                     │                               └──────┘  │
                     └─────────────────────────────────────────┘
 
-           POWER SUPPLY (3× AAA → 3.3V)
+       POWER SUPPLY (3× AAA → momentary switch → MCP1700 → 3.3V)
     ┌─────────────────────────────────────────────────────────┐
     │                                                         │
-    │   3× AAA          MCP1700-3302E                        │
-    │   (4.5V)          ┌─────────┐                          │
-    │     +             │         │                          │
-    │     ├────┬────────┤ VIN     │                          │
-    │     │   ─┴─       │      VOUT├───────────→ ESP32 3V3   │
-    │    ─┴─  ───  1µF  │         │        │                 │
-    │    ───   │        │     GND │       ─┴─                │
-    │     │    │        └────┬────┘       ───  1µF           │
-    │     └────┴─────────────┴─────────────┴──→ ESP32 GND    │
+    │   3× AAA      MOMENTARY      MCP1700-3302E             │
+    │   (4.5V)       SWITCH        ┌─────────┐               │
+    │     +     ╱○                 │         │               │
+    │     ├────○ ──────┬───────────┤ VIN     │               │
+    │     │           ─┴─          │      VOUT├──→ ESP32 3V3 │
+    │    ─┴─          ───  1µF     │         │     │         │
+    │    ───           │           │     GND │    ─┴─        │
+    │     │            │           └────┬────┘    ───  1µF   │
+    │     └────────────┴────────────────┴─────────┴──→ ESP32 GND │
     │     -                                                   │
     └─────────────────────────────────────────────────────────┘
+
+  Hold the switch to power the device. Releasing it cuts the battery
+  completely — no quiescent draw, no deep sleep needed.
 ```
 
 ### Component Details
 
 | Part | Description |
 |------|-------------|
-| **Reset Button** | Momentary push button between EN and GND — wakes ESP32 from deep sleep |
+| **Momentary Switch** | Press-and-hold push button in series with the battery's positive lead. Releasing fully disconnects the battery |
 | **MCP1700-3302E** | Low-dropout 3.3V regulator (250mA max, ideal for battery operation) |
 | **1µF Capacitors** | Ceramic caps on VIN and VOUT for regulator stability |
 | **3× AAA** | Provides ~4.5V nominal (works down to ~3.6V with MCP1700) |
@@ -210,7 +208,7 @@ In `src/main.cpp`:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `awakeTimeMs` | `30000` | Display on-time before sleep (ms) |
+| `awakeTimeMs` | `10000` | Maximum display on-time after data is loaded (ms). The switch cuts power on release, so this is just an upper bound before the firmware would enter deep sleep on its own. |
 
 ## Prerequisites
 
@@ -245,83 +243,75 @@ Managed automatically by PlatformIO:
 ## How It Works
 
 ```
-┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐
-│  Boot   │───►│  WiFi   │───►│  Fetch  │───►│ Display │
-│         │    │ Connect │    │  Data   │    │  30sec  │
-└─────────┘    └─────────┘    └─────────┘    └────┬────┘
-                                                  │
-                    ┌─────────┐                   │
-                    │  Deep   │◄──────────────────┘
-                    │  Sleep  │
-                    └─────────┘
+   ┌────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌────────┐
+   │ Press  │────►│  Boot   │────►│  WiFi   │────►│  Fetch  │────►│Display │
+   │ switch │     │ + spin  │     │ Connect │     │  Data   │     │results │
+   └────────┘     └─────────┘     └─────────┘     └─────────┘     └────┬───┘
+                                                                       │
+                                                                  Release switch
+                                                                       │
+                                                                       ▼
+                                                                  Power off
+                                                                  (zero draw)
 ```
 
-1. **Boot** — Initialize display, show progress
-2. **Connect** — Join WiFi network
-3. **Fetch** — Query VAG Freiburg EFA for departures
-4. **Display** — Show next 3 matching trams
-5. **Sleep** — Enter deep sleep to save power
+1. **Press the switch** — battery connects to the regulator, ESP32 boots
+2. **Boot + spinner** — display lights up immediately, an animated spinner runs while WiFi and the HTTP fetch happen on the main core
+3. **Connect** — Join WiFi network
+4. **Fetch** — Query VAG Freiburg EFA over plain HTTP for the next departures
+5. **Display results** — Spinner is replaced by up to three matching trams
+6. **Release the switch** — battery is physically disconnected; nothing runs, nothing drains
 
-## Battery Life Estimation
+## Power Profile
 
-Detailed power analysis for the 3× AAA battery configuration.
+Because the switch cuts the battery completely on release, there is no
+"sleep current" to dominate battery life — only the energy spent during
+each button press.
 
 ### Component Current Draw
 
-| Component | Active | Deep Sleep | Notes |
-|-----------|--------|------------|-------|
-| **ESP32** | ~80 mA | ~10 µA | WiFi TX peaks at ~240 mA |
-| **SSD1306 OLED** | ~20 mA | ~0 µA | Varies with content (~50% pixels lit) |
-| **MCP1700 Regulator** | ~4 µA | ~4 µA | Quiescent current |
-| **Total Active** | **~100 mA** | — | Average during operation |
-| **Total Sleep** | — | **~15 µA** | Deep sleep with display off |
+| Component | While powered | While switch open |
+|-----------|---------------|-------------------|
+| **ESP32 (active)** | ~80 mA | 0 mA |
+| **WiFi TX peaks** | up to ~240 mA | 0 mA |
+| **SSD1306 OLED** | ~20 mA (lit) | 0 mA |
+| **MCP1700 Regulator** | ~1.6 µA quiescent | 0 mA |
+| **Total** | **~100 mA average** | **0 mA** |
 
-### Power Cycle Breakdown
+### Energy Per Activation
 
-Each button press triggers one complete cycle:
+Each press is roughly:
 
 | Phase | Duration | Current | Energy (mAh) |
 |-------|----------|---------|--------------|
-| Boot + WiFi Connect | ~5 sec | 120 mA | 0.167 |
-| HTTPS Request | ~3 sec | 110 mA | 0.092 |
-| Display Active | 30 sec | 25 mA | 0.208 |
-| **Total per cycle** | **~40 sec** | — | **~0.52 mAh** |
+| Boot + WiFi connect | ~3 s | ~120 mA | 0.10 |
+| HTTP fetch + parse | ~0.5 s | ~110 mA | 0.015 |
+| Display lit (`awakeTimeMs`) | ~10 s | ~25 mA | 0.07 |
+| **Total per activation** | **~13 s** | — | **~0.19 mAh** |
 
-> **Note:** WiFi is disabled after data fetch, so the 30-second display period only draws ~25 mA (ESP32 idle + OLED).
+> The switchover from HTTPS to plain HTTP shaves roughly 1–2 s of TLS
+> handshake from each cycle.
 
 ### Estimated Battery Life
 
-**Typical usage: 3 activations per day**
+Battery life scales linearly with how often you press the button:
 
-```
-Daily consumption:
-  Active:  3 cycles × 0.52 mAh = 1.56 mAh
-  Sleep:   15 µA × 24 h        = 0.36 mAh
-  Total:                       = 1.92 mAh/day
+| Usage pattern | Activations/day | Daily energy | Life on 900 mAh AAA pack |
+|---------------|-----------------|--------------|--------------------------|
+| Minimal | 1 | 0.19 mAh | ~13 years (limited by shelf life) |
+| Typical | 3 | 0.57 mAh | ~4 years (limited by shelf life) |
+| Moderate | 5 | 0.95 mAh | ~2.6 years (limited by shelf life) |
+| Heavy | 20 | 3.8 mAh | ~8 months |
 
-Battery life:
-  900 mAh ÷ 1.92 mAh/day ≈ 470 days (~15 months)
-```
+> **Note:** Real-world battery life will usually be capped by alkaline
+> shelf life (~5–10 years) or NiMH self-discharge, not by the device.
+> Assumes ~900 mAh usable capacity from 3× AAA alkalines down to the
+> MCP1700's ~3.6 V dropout point.
 
-> **Note:** Assumes ~900 mAh usable capacity from 3× AAA alkaline batteries (accounting for 3.6V voltage cutoff).
+### Tips
 
-| Usage Pattern | Cycles/Day | Battery Life (Alkaline) |
-|---------------|------------|-------------------------|
-| Minimal (1×/day) | 1 | ~2 years |
-| Typical (3×/day) | 3 | **~15 months** |
-| Moderate (5×/day) | 5 | ~10 months |
-| Heavy (10×/day) | 10 | ~5 months |
-
-### Key Takeaways
-
-- **Sleep current dominates** — At low usage, the 15 µA sleep current determines battery life
-- **Theoretical maximum** — If never used: 900 mAh ÷ 0.36 mAh/day ≈ 2,500 days (~7 years)
-- **Sweet spot** — 1–5 checks per day yields over a year of battery life
-
-### Tips to Maximize Battery Life
-
-1. **Reduce `awakeTimeMs`** — 15 seconds instead of 30 saves ~0.1 mAh per cycle
-2. **Use quality alkaline batteries** — Higher capacity and better voltage retention
+1. **Don't hold the switch longer than you need to read the screen** — the display draws ~25 mA continuously while powered.
+2. **Use quality alkaline batteries** for the longest shelf life. NiMH works too but self-discharges faster, so its calendar life is shorter even though its capacity is similar.
 
 ---
 
