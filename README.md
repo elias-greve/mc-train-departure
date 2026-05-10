@@ -32,7 +32,7 @@ A compact embedded system that fetches live departure times for German public tr
 
 ### Features
 
-- **Real-time data** from the German Rail API
+- **Real-time data** from VAG Freiburg's EFA system
 - **Smart filtering** — shows only relevant directions
 - **Delay indicators** — see if your tram is running late
 - **Countdown display** — minutes until departure
@@ -165,24 +165,30 @@ All user settings are in `src/secrets.h`:
 const char* WIFI_SSID = "your-network";
 const char* WIFI_PASSWORD = "your-password";
 
-// Station ID - find yours at https://v6.db.transport.rest/locations?query=YOUR_STATION
-const char* STATION_ID = "YOUR_STATION_ID";
+// VAG Stop ID - find yours at:
+// https://efa.vagfr.de/vagfr3/XSLT_STOPFINDER_REQUEST?outputFormat=JSON&type_sf=any&name_sf=YOUR_STOP_NAME
+const char* STATION_ID = "YOUR_STOP_ID";  // see lookup link below
 
 // Comma-separated list of direction keywords to filter for
 // Only departures containing one of these strings will be shown
 // Leave empty ("") to show all departures
-const char* DIRECTION_FILTER = "Hauptbahnhof,Marktplatz";
+const char* DIRECTION_FILTER = "YOUR_DIRECTION";
 ```
 
-### Finding Your Station ID
+### Finding Your Stop ID
+
+The firmware queries VAG Freiburg's EFA system directly — no API key, no
+intermediary server, no rate limits.
 
 1. Open your browser and go to:
    ```
-   https://v6.db.transport.rest/locations?query=YOUR_STATION_NAME
+   https://efa.vagfr.de/vagfr3/XSLT_STOPFINDER_REQUEST?outputFormat=JSON&type_sf=any&name_sf=YOUR_STOP_NAME
    ```
-   Replace `YOUR_STATION_NAME` with your station (e.g., `Hauptbahnhof` or `Münsterplatz`).
+   Replace `YOUR_STOP_NAME` with your stop name.
 
-2. Find your station in the JSON response and copy the `id` field.
+2. Find your stop in the JSON response and copy the stop's numeric ID.
+   Pick a specific stop (e.g. `STOP_ID` — "Stop name from response"),
+   not a station area.
 
 ### Filtering Directions
 
@@ -191,6 +197,12 @@ The `DIRECTION_FILTER` setting lets you show only departures heading in specific
 - Use partial matches: `"Haupt"` will match `"Hauptbahnhof"`
 - Separate multiple filters with commas: `"Hauptbahnhof,Marktplatz"`
 - Leave empty to show all departures: `""`
+
+### Other Cities
+
+The firmware currently targets VAG Freiburg's EFA endpoint. If you'd like
+support for a different city's transit system, open an issue — I might
+take a stab at adapting the code so it works for your provider too.
 
 ### Other Settings
 
@@ -246,10 +258,9 @@ Managed automatically by PlatformIO:
 
 1. **Boot** — Initialize display, show progress
 2. **Connect** — Join WiFi network
-3. **Sync** — Get current time via NTP
-4. **Fetch** — Query departures from API
-5. **Display** — Show next 3 matching trams
-6. **Sleep** — Enter deep sleep to save power
+3. **Fetch** — Query VAG Freiburg EFA for departures
+4. **Display** — Show next 3 matching trams
+5. **Sleep** — Enter deep sleep to save power
 
 ## Battery Life Estimation
 
@@ -272,7 +283,6 @@ Each button press triggers one complete cycle:
 | Phase | Duration | Current | Energy (mAh) |
 |-------|----------|---------|--------------|
 | Boot + WiFi Connect | ~5 sec | 120 mA | 0.167 |
-| NTP Sync | ~2 sec | 100 mA | 0.056 |
 | HTTPS Request | ~3 sec | 110 mA | 0.092 |
 | Display Active | 30 sec | 25 mA | 0.208 |
 | **Total per cycle** | **~40 sec** | — | **~0.52 mAh** |
