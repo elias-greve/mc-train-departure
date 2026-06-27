@@ -1,6 +1,7 @@
 #include <unity.h>
 #include "../src/departure_logic.h"
 #include <string.h>
+#include <string>
 
 // ============================================================================
 // Tests for matchesDirectionFilter
@@ -65,6 +66,29 @@ void test_matchesDirectionFilter_only_commas(void) {
 void test_matchesDirectionFilter_whitespace_only(void) {
     TEST_ASSERT_FALSE(matchesDirectionFilter("Alpha", "   "));
     TEST_ASSERT_FALSE(matchesDirectionFilter("Alpha", " , "));
+}
+
+void test_matchesDirectionFilter_exclude_blocks_match(void) {
+    // "!Alpha" shows everything except directions containing "Alpha"
+    TEST_ASSERT_FALSE(matchesDirectionFilter("Alpha", "!Alpha"));
+    TEST_ASSERT_TRUE(matchesDirectionFilter("Beta", "!Alpha"));
+}
+
+void test_matchesDirectionFilter_exclude_substring(void) {
+    TEST_ASSERT_FALSE(matchesDirectionFilter("Test City Alpha Station", "!Alpha"));
+}
+
+void test_matchesDirectionFilter_multiple_excludes(void) {
+    TEST_ASSERT_FALSE(matchesDirectionFilter("Alpha", "!Alpha,!Gamma"));
+    TEST_ASSERT_FALSE(matchesDirectionFilter("Gamma", "!Alpha,!Gamma"));
+    TEST_ASSERT_TRUE(matchesDirectionFilter("Beta", "!Alpha,!Gamma"));
+}
+
+void test_matchesDirectionFilter_exclude_wins_over_include(void) {
+    // An exclusion always rejects, even if an include would otherwise match.
+    TEST_ASSERT_FALSE(matchesDirectionFilter("Alpha Beta", "Beta,!Alpha"));
+    // Include without the excluded term still matches.
+    TEST_ASSERT_TRUE(matchesDirectionFilter("Beta", "Beta,!Alpha"));
 }
 
 // ============================================================================
@@ -142,16 +166,48 @@ void test_parseDeparturesJson_no_departure_list_key(void) {
     const char* json = R"({ "error": "not found" })";
     DeparturesResult result = parseDeparturesJson(json, 10);
     TEST_ASSERT_FALSE(result.success);
+    TEST_ASSERT_EQUAL_INT(PARSE_ERR_NO_LIST, result.error);
 }
 
 void test_parseDeparturesJson_invalid_json(void) {
     DeparturesResult result = parseDeparturesJson("not valid json at all", 10);
     TEST_ASSERT_FALSE(result.success);
+    TEST_ASSERT_EQUAL_INT(PARSE_ERR_INVALID_JSON, result.error);
 }
 
 void test_parseDeparturesJson_null_input(void) {
     DeparturesResult result = parseDeparturesJson(NULL, 10);
     TEST_ASSERT_FALSE(result.success);
+    TEST_ASSERT_EQUAL_INT(PARSE_ERR_NULL_INPUT, result.error);
+}
+
+void test_parseDeparturesJson_success_sets_ok(void) {
+    const char* json = R"({ "departureList": [] })";
+    DeparturesResult result = parseDeparturesJson(json, 10);
+    TEST_ASSERT_TRUE(result.success);
+    TEST_ASSERT_EQUAL_INT(PARSE_OK, result.error);
+}
+
+void test_parseDeparturesJson_no_memory(void) {
+    // Build a well-formed response large enough to overflow the document pool.
+    // Each entry carries a long direction string; ~400 entries far exceeds the
+    // 16 KB pool, so deserialization must report NoMemory, not malformed JSON.
+    std::string json = "{ \"departureList\": [";
+    for (int i = 0; i < 400; i++) {
+        if (i > 0) json += ",";
+        json +=
+            "{ \"countdown\": \"5\","
+            "\"dateTime\": { \"hour\": \"17\", \"minute\": \"26\" },"
+            "\"realDateTime\": { \"hour\": \"17\", \"minute\": \"29\" },"
+            "\"servingLine\": { \"direction\": "
+            "\"Very long direction name used to inflate the payload well past the pool size\","
+            "\"number\": \"3\", \"realtime\": \"1\" } }";
+    }
+    json += "] }";
+
+    DeparturesResult result = parseDeparturesJson(json.c_str(), 10);
+    TEST_ASSERT_FALSE(result.success);
+    TEST_ASSERT_EQUAL_INT(PARSE_ERR_NO_MEMORY, result.error);
 }
 
 void test_parseDeparturesJson_max_results_limit(void) {
@@ -304,6 +360,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_matchesDirectionFilter_trailing_comma);
     RUN_TEST(test_matchesDirectionFilter_only_commas);
     RUN_TEST(test_matchesDirectionFilter_whitespace_only);
+    RUN_TEST(test_matchesDirectionFilter_exclude_blocks_match);
+    RUN_TEST(test_matchesDirectionFilter_exclude_substring);
+    RUN_TEST(test_matchesDirectionFilter_multiple_excludes);
+    RUN_TEST(test_matchesDirectionFilter_exclude_wins_over_include);
 
     // parseDeparturesJson (EFA) tests
     RUN_TEST(test_parseDeparturesJson_valid_response);
@@ -312,6 +372,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_parseDeparturesJson_no_departure_list_key);
     RUN_TEST(test_parseDeparturesJson_invalid_json);
     RUN_TEST(test_parseDeparturesJson_null_input);
+    RUN_TEST(test_parseDeparturesJson_success_sets_ok);
+    RUN_TEST(test_parseDeparturesJson_no_memory);
     RUN_TEST(test_parseDeparturesJson_max_results_limit);
     RUN_TEST(test_parseDeparturesJson_unicode_direction);
     RUN_TEST(test_parseDeparturesJson_long_direction_truncated);

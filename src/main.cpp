@@ -196,26 +196,39 @@ void fetchDepartures() {
     }
 
     if (httpCode == HTTP_CODE_OK) {
-      Serial.println("   Parsing JSON...");
-      String body = http.getString();
-      http.end();
+      Serial.printf("   Parsing JSON... (free heap: %u, content-length: %d)\n", ESP.getFreeHeap(),
+                    http.getSize());
 
-      // Parse via shared logic; retry on parse failure just like HTTP errors.
-      DeparturesResult parsed = parseDeparturesJson(body.c_str(), 15);
+      // Stream-parse directly from the socket. The EFA body is ~167 KB; buffering
+      // it whole via http.getString() exhausts the heap once WiFi is up, leaving a
+      // truncated body that fails as invalid JSON. Streaming keeps peak RAM low.
+      DeparturesResult parsed = parseDeparturesJsonStream(http.getStream(), 15);
+      http.end();
       if (!parsed.success) {
-        Serial.println("   JSON parse error, retrying...");
-        if (attempt < maxRetries) {
+        // A too-large response is deterministic: retrying the identical payload
+        // cannot help, so fail fast instead of burning the remaining attempts.
+        bool retryable = (parsed.error != PARSE_ERR_NO_MEMORY);
+        Serial.printf("   JSON parse error (code %d)%s\n", parsed.error,
+                      retryable ? ", retrying..." : ", not retryable");
+        if (retryable && attempt < maxRetries) {
           delay(2000);
           continue;
         }
-        // All retries exhausted with parse errors
+
+        // Out of retries (or unrecoverable): show a message specific to the cause.
         stopSpinner();
         display.clearDisplay();
         display.setTextSize(1);
         display.setCursor(0, 20);
-        display.print("Parse error");
-        display.setCursor(0, 36);
-        display.print("Try again later");
+        if (parsed.error == PARSE_ERR_NO_MEMORY) {
+          display.print("Data too large");
+          display.setCursor(0, 36);
+          display.print("Lower limit/raise buf");
+        } else {
+          display.print("Parse error");
+          display.setCursor(0, 36);
+          display.print("Try again later");
+        }
         display.display();
         return;
       }
